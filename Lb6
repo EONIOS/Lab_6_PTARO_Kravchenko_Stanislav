@@ -1,0 +1,166 @@
+#include <iostream>
+#include <vector>
+#include <cmath>
+#include <cstdlib>
+#include <fstream>
+#include <iomanip>
+#include <omp.h>
+
+using namespace std;
+
+// ЗАВДАННЯ 1: Скалярний добуток векторів
+double dot_product_serial(const vector<double>& a, const vector<double>& b, int n) {
+    double dot = 0.0;
+    for (int i = 0; i < n; i++) {
+        dot += a[i] * b[i];
+    }
+    return dot;
+}
+
+double dot_product_parallel(const vector<double>& a, const vector<double>& b, int n, int num_threads) {
+    double dot = 0.0;
+#pragma omp parallel for num_threads(num_threads) reduction(+:dot)
+    for (int i = 0; i < n; i++) {
+        dot += a[i] * b[i];
+    }
+    return dot;
+}
+
+// ЗАВДАННЯ 2: Матричні норми ||A||_inf та ||A||_F
+double norm_inf_serial(double** matrix, int n) {
+    double max_sum = 0.0;
+    for (int i = 0; i < n; i++) {
+        double row_sum = 0.0;
+        for (int j = 0; j < n; j++) {
+            row_sum += abs(matrix[i][j]);
+        }
+        if (row_sum > max_sum) max_sum = row_sum;
+    }
+    return max_sum;
+}
+
+double norm_inf_parallel(double** matrix, int n, int num_threads) {
+    double max_sum = 0.0;
+#pragma omp parallel num_threads(num_threads)
+    {
+        double local_max = 0.0;
+#pragma omp for
+        for (int i = 0; i < n; i++) {
+            double row_sum = 0.0;
+            for (int j = 0; j < n; j++) {
+                row_sum += abs(matrix[i][j]);
+            }
+            if (row_sum > local_max) {
+                local_max = row_sum;
+            }
+        }
+#pragma omp critical
+        {
+            if (local_max > max_sum) {
+                max_sum = local_max;
+            }
+        }
+    }
+    return max_sum;
+}
+
+double norm_frobenius_serial(double** matrix, int n) {
+    double sum_sq = 0.0;
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            sum_sq += matrix[i][j] * matrix[i][j];
+        }
+    }
+    return sqrt(sum_sq);
+}
+
+double norm_frobenius_parallel(double** matrix, int n, int num_threads) {
+    double sum_sq = 0.0;
+#pragma omp parallel for num_threads(num_threads) reduction(+:sum_sq)
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            sum_sq += matrix[i][j] * matrix[i][j];
+        }
+    }
+    return sqrt(sum_sq);
+}
+
+int main() {
+    const int DIM_COUNT = 6;
+    int dims[DIM_COUNT] = { 100, 500, 1000, 2000, 3000, 5000 };
+
+    const int THREADS_COUNT = 6;
+    int threads[THREADS_COUNT] = { 2, 4, 6, 8, 10, 20 };
+
+    cout << "ZAVDANNIA 1: Skalyarniy dobutok vektoriv" << endl;
+    int vec_n = 5000000;
+    vector<double> a(vec_n, 1.25), b(vec_n, 2.40);
+
+    double t_start = omp_get_wtime();
+    double res_ser = dot_product_serial(a, b, vec_n);
+    double t_ser = omp_get_wtime() - t_start;
+    cout << "Serial time: " << t_ser << " s, Res: " << res_ser << endl;
+
+    for (int t = 0; t < THREADS_COUNT; t++) {
+        t_start = omp_get_wtime();
+        double res_par = dot_product_parallel(a, b, vec_n, threads[t]);
+        double t_par = omp_get_wtime() - t_start;
+        cout << "Threads " << setw(2) << threads[t]
+            << " | Time: " << fixed << setprecision(5) << t_par
+            << " s | Speedup: " << setprecision(2) << (t_ser / t_par) << endl;
+    }
+
+    cout << "\nZAVDANNIA 2: Matrichni normi ||A||_inf ta ||A||_F" << endl;
+
+    ofstream fs("result.txt");
+    fs << "Dimension\tThreads\tSpeedup_Inf\tSpeedup_Frob\n";
+
+    for (int d = 0; d < DIM_COUNT; d++) {
+        int n = dims[d];
+        cout << "\nMatritsya rozmiru " << n << "x" << n  << endl;
+
+        double** matrix = new double* [n];
+        for (int i = 0; i < n; i++) {
+            matrix[i] = new double[n];
+            for (int j = 0; j < n; j++) {
+                matrix[i][j] = (double)(rand() % 200 - 100) / 10.0;
+            }
+        }
+
+        double t0 = omp_get_wtime();
+        norm_inf_serial(matrix, n);
+        double t_inf_s = omp_get_wtime() - t0;
+
+        t0 = omp_get_wtime();
+        norm_frobenius_serial(matrix, n);
+        double t_frob_s = omp_get_wtime() - t0;
+
+        for (int t = 0; t < THREADS_COUNT; t++) {
+            int th = threads[t];
+
+            t0 = omp_get_wtime();
+            norm_inf_parallel(matrix, n, th);
+            double t_inf_p = omp_get_wtime() - t0;
+
+            t0 = omp_get_wtime();
+            norm_frobenius_parallel(matrix, n, th);
+            double t_frob_p = omp_get_wtime() - t0;
+
+            double S_inf = (t_inf_p > 0) ? (t_inf_s / t_inf_p) : 1.0;
+            double S_frob = (t_frob_p > 0) ? (t_frob_s / t_frob_p) : 1.0;
+
+            fs << n << "\t" << th << "\t" << S_inf << "\t" << S_frob << "\n";
+
+            cout << "Threads " << setw(2) << th
+                << " | S_inf: " << setprecision(2) << S_inf
+                << " | S_frob: " << setprecision(2) << S_frob << endl;
+        }
+
+        for (int i = 0; i < n; i++) delete[] matrix[i];
+        delete[] matrix;
+    }
+
+    fs.close();
+    cout << "\nRezultaty uspishno zapysano u result.txt" << endl;
+    return 0;
+}
